@@ -1,0 +1,100 @@
+# Amazon Linux / RHEL / CentOS:
+
+# 1 Disable Swap (Both Nodes)
+sudo swapoff -a
+sudo sed -i '/ swap /d' /etc/fstab
+
+# 2 Load Required Kernel Modules (Both Nodes)
+sudo modprobe overlay
+sudo modprobe br_netfilter
+cat <<EOF | sudo tee /etc/modules-load.d/k8s.conf
+overlay
+br_netfilter
+EOF
+
+# 3 Configure Sysctl Networking (Both Nodes)
+cat <<EOF | sudo tee /etc/sysctl.d/k8s.conf
+net.bridge.bridge-nf-call-iptables=1
+net.bridge.bridge-nf-call-ip6tables=1
+net.ipv4.ip_forward=1
+EOF
+sudo sysctl --system
+
+# 4 Install containerd Runtime (Both Nodes)
+sudo yum update -y
+sudo yum install -y containerd
+# Create default config:
+sudo mkdir -p /etc/containerd
+containerd config default | sudo tee /etc/containerd/config.toml
+
+# Enable SystemdCgroup (required for kubelet):
+
+sudo sed -i 's/SystemdCgroup = false/SystemdCgroup = true/' /etc/containerd/config.toml
+# Start containerd:
+sudo systemctl enable --now containerd
+# Verify:
+containerd --version
+
+# 5 Install Kubernetes Packages (Both Nodes)
+# Add Kubernetes repo:
+cat <<EOF | sudo tee /etc/yum.repos.d/kubernetes.repo
+[kubernetes]
+name=Kubernetes
+baseurl=https://pkgs.k8s.io/core:/stable:/v1.29/rpm/
+enabled=1
+gpgcheck=1
+gpgkey=https://pkgs.k8s.io/core:/stable:/v1.29/rpm/repodata/repomd.xml.key
+EOF
+
+#Install packages:
+
+sudo yum install -y kubelet kubeadm kubectl
+
+# Enable kubelet:
+sudo systemctl enable --now kubelet
+# Verify:
+kubeadm version
+kubectl version --client
+kubelet --version
+
+# 6 Set Hostnames (Recommended)
+# Master Node
+sudo hostnamectl set-hostname k8s-master
+
+# 7 Initialize Kubernetes Master Node (MASTER ONLY)
+sudo kubeadm init --pod-network-cidr=10.244.0.0/16
+# After initialization finishes, run:
+mkdir -p $HOME/.kube
+sudo cp /etc/kubernetes/admin.conf $HOME/.kube/config
+sudo chown $(id -u):$(id -g) $HOME/.kube/config
+# Verify control plane:
+kubectl get nodes
+
+# 8 Install Flannel Network (MASTER ONLY)
+Install Flannel:
+kubectl apply -f https://raw.githubusercontent.com/flannel-io/flannel/master/Documentation/kube-flannel.yml
+
+# Check pods:
+kubectl get pods -n kube-system
+
+# 9 Get Worker Join Command (MASTER)
+# ------------------------- kubeadm token create --print-join-command
+
+#Example output:
+#kubeadm join 172.31.0.10:6443 --token abcdef.1234567890 \
+#--discovery-token-ca-cert-hash sha256:xxxxxxxx
+# Copy this command.
+
+# 10 Join Worker Node to Cluster (WORKER)
+# Run the command copied from master:
+# sudo kubeadm join <MASTER-IP>:6443 --token <TOKEN> \
+# --discovery-token-ca-cert-hash sha256:<HASH>
+
+# 11 Verify Cluster (MASTER)
+#    -------------------  kubectl get nodes
+# Expected output:
+# NAME          STATUS   ROLES           AGE   VERSION
+# k8s-master    Ready    control-plane   2m    v1.29.x
+# k8s-worker1   Ready    <none>          1m    v1.29.x
+
+	
